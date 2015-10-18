@@ -1,3 +1,5 @@
+"""This is the SAML2 Plugin."""
+
 import logging
 import uuid
 
@@ -20,30 +22,36 @@ def _no_permissions(context, msg):
 
 @logic.auth_sysadmins_check
 def user_create(context, data_dict):
+    """Fail at an attempt to create a user."""
     msg = p.toolkit._('Users cannot be created.')
     return _no_permissions(context, msg)
 
 
 @logic.auth_sysadmins_check
 def user_update(context, data_dict):
+    """Fail at an attempt to edit a user."""
     msg = p.toolkit._('Users cannot be edited.')
     return _no_permissions(context, msg)
 
 
 @logic.auth_sysadmins_check
 def user_reset(context, data_dict):
+    """Fail at an attempt to reset a password."""
     msg = p.toolkit._('Users cannot reset passwords.')
     return _no_permissions(context, msg)
 
 
 @logic.auth_sysadmins_check
 def request_reset(context, data_dict):
+    """Fail at a request to reset a password."""
     msg = p.toolkit._('Users cannot reset passwords.')
     return _no_permissions(context, msg)
 
 rememberer_name = None
 
+
 def delete_cookies():
+    """Strip all cookies from a response."""
     global rememberer_name
     if rememberer_name is None:
         plugins = p.toolkit.request.environ['repoze.who.plugins']
@@ -54,17 +62,20 @@ def delete_cookies():
     domain = p.toolkit.request.environ['HTTP_HOST']
     base.response.delete_cookie(rememberer_name, domain='.' + domain)
 
+
 class Saml2Plugin(p.SingletonPlugin):
+
+    """The SAML2 Plugin."""
 
     p.implements(p.IAuthenticator, inherit=True)
     p.implements(p.IRoutes, inherit=True)
     p.implements(p.IAuthFunctions, inherit=True)
     p.implements(p.IConfigurable)
 
-
     saml_identify = None
 
     def make_mapping(self, key, config):
+        """Map the config to the keys."""
         data = config.get(key)
         mapping = {}
         for item in data.split():
@@ -73,11 +84,13 @@ class Saml2Plugin(p.SingletonPlugin):
         return mapping
 
     def configure(self, config):
+        """Map the user and organization configuration."""
         self.user_mapping = self.make_mapping('saml2.user_mapping', config)
         m = self.make_mapping('saml2.organization_mapping', config)
         self.organization_mapping = m
 
     def before_map(self, map):
+        """Connect the Unauthorized and SLO controllers."""
         map.connect(
             'saml2_unauthorized',
             '/saml2_unauthorized',
@@ -93,17 +106,20 @@ class Saml2Plugin(p.SingletonPlugin):
         return map
 
     def make_password(self):
-        # create a hard to guess password
+        """Autogenerate an 8 character password."""
         out = ''
         for n in xrange(8):
             out += str(uuid.uuid4())
         return out
 
     def identify(self):
-        ''' This does work around saml2 authorization.
-        c.user contains the saml2 id of the logged in user we need to
-        convert this to represent the ckan user. '''
+        """
+        Map the SAML2 identity to the CKAN user.
 
+        This does work around saml2 authorization.
+        c.user contains the saml2 id of the logged in user we need to
+        convert this to represent the ckan user.
+        """
         # Can we find the user?
         c = p.toolkit.c
         environ = p.toolkit.request.environ
@@ -143,7 +159,7 @@ class Saml2Plugin(p.SingletonPlugin):
                 user_schema['id'] = [p.toolkit.get_validator('not_empty')]
                 user_schema['name'] = [p.toolkit.get_validator('not_empty')]
 
-                context = {'schema' : user_schema, 'ignore_auth': True}
+                context = {'schema': user_schema, 'ignore_auth': True}
                 user = p.toolkit.get_action('user_create')(context, data_dict)
                 c.userobj = model.User.get(c.user)
 
@@ -154,6 +170,7 @@ class Saml2Plugin(p.SingletonPlugin):
                     self.create_organization(saml_info)
 
     def create_organization(self, saml_info):
+        """Create an organization."""
         org_name = saml_info[self.organization_mapping['name']][0]
         org = model.Group.get(org_name)
 
@@ -165,8 +182,10 @@ class Saml2Plugin(p.SingletonPlugin):
             context = {'user': site_user['name']}
             data_dict = {
             }
-            self.update_data_dict(data_dict, self.organization_mapping, saml_info)
-            org = p.toolkit.get_action('organization_create')(context, data_dict)
+            self.update_data_dict(data_dict, self.organization_mapping,
+                                  saml_info)
+            org = p.toolkit.get_action('organization_create')(context,
+                                                              data_dict)
             org = model.Group.get(org_name)
 
         # check if we are a member of the organization
@@ -182,19 +201,20 @@ class Saml2Plugin(p.SingletonPlugin):
                 'id': org.id,
                 'object': c.userobj.id,
                 'object_type': 'user',
-                'capacity': 'editor' \
-                    if saml_info['field_type_of_user'][0] == 'Publisher' \
-                    else 'member',
+                'capacity': 'editor'
+                            if saml_info['field_type_of_user'][0] == 'Publisher'
+                            else 'member',
             }
             member_create_context = {
                 'user': site_user['name'],
                 'ignore_auth': True,
             }
 
-            p.toolkit.get_action('member_create')(member_create_context, member_dict)
-
+            p.toolkit.get_action('member_create')(member_create_context,
+                                                  member_dict)
 
     def update_data_dict(self, data_dict, mapping, saml_info):
+        """Update the data dictionary."""
         for field in mapping:
             value = saml_info.get(mapping[field])
             if value:
@@ -206,18 +226,22 @@ class Saml2Plugin(p.SingletonPlugin):
                 else:
                     if 'extras' not in data_dict:
                         data_dict['extras'] = []
-                    data_dict['extras'].append(dict(key=field[7:], value=value))
+                    data_dict['extras'].append(dict(key=field[7:],
+                                               value=value))
 
     def login(self):
-        # We can be here either because we are requesting a login (no user)
-        # or we have just been logged in.
+        """Login.
+
+        We can be here either because we are requesting a login (no user)
+        or we have just been logged in.
+        """
         if not p.toolkit.c.user:
             # A 401 HTTP Status will cause the login to be triggered
             return base.abort(401, p.toolkit._('Login required!'))
         h.redirect_to(controller='user', action='dashboard')
 
-
     def logout(self):
+        """Logout."""
         environ = p.toolkit.request.environ
         subject_id = environ["repoze.who.identity"]['repoze.who.userid']
         client = environ['repoze.who.plugins']["saml2auth"]
@@ -228,6 +252,7 @@ class Saml2Plugin(p.SingletonPlugin):
         h.redirect_to(saml_logout[2][0][1])
 
     def abort(self, status_code, detail, headers, comment):
+        """Abort a login."""
         # HTTP Status 401 causes a login redirect.  We need to prevent this
         # unless we are actually trying to login.
         if (status_code == 401
@@ -236,6 +261,7 @@ class Saml2Plugin(p.SingletonPlugin):
         return (status_code, detail, headers, comment)
 
     def get_auth_functions(self):
+        """Unauthorize certain behaviors."""
         # we need to prevent some actions being authorized.
         return {
             'user_create': user_create,
@@ -247,14 +273,20 @@ class Saml2Plugin(p.SingletonPlugin):
 
 class Saml2Controller(base.BaseController):
 
+    """SAML2 Controller."""
+
     def saml2_unauthorized(self):
-        # This is our you are not authorized page
+        """Return an 'unauthorized' message.
+
+        This is our you are not authorized page
+        """
         c = p.toolkit.c
         c.code = 401
         c.content = p.toolkit._('You are not authorized to do this')
         return p.toolkit.render('error_document_template.html')
 
     def slo(self):
+        """Single Logon."""
         environ = p.toolkit.request.environ
         # so here I might get either a LogoutResponse or a LogoutRequest
         client = environ['repoze.who.plugins']['saml2auth']
@@ -265,26 +297,27 @@ class Saml2Controller(base.BaseController):
             if saml_req:
                 get = p.toolkit.request.GET
                 subject_id = environ["repoze.who.identity"]['repoze.who.userid']
-                headers, success = client.saml_client.do_http_redirect_logout(get, subject_id)
+                headers, success = client.saml_client.do_http_redirect_logout(
+                    get, subject_id)
                 h.redirect_to(headers[0][1])
             elif saml_resp:
-             ##   # fix the cert so that it is on multiple lines
-             ##   out = []
-             ##   # if on multiple lines make it a single one
-             ##   line = ''.join(saml_resp.split('\n'))
-             ##   while len(line) > 64:
-             ##       out.append(line[:64])
-             ##       line = line[64:]
-             ##   out.append(line)
-             ##   saml_resp = '\n'.join(out)
-             ##   try:
-             ##       res = client.saml_client.logout_request_response(
-             ##           saml_resp,
-             ##           binding=BINDING_HTTP_REDIRECT
-             ##       )
-             ##   except KeyError:
-             ##       # return error reply
-             ##       pass
+                #   # fix the cert so that it is on multiple lines
+                #   out = []
+                #   # if on multiple lines make it a single one
+                #   line = ''.join(saml_resp.split('\n'))
+                #   while len(line) > 64:
+                #       out.append(line[:64])
+                #       line = line[64:]
+                #   out.append(line)
+                #   saml_resp = '\n'.join(out)
+                #   try:
+                #       res = client.saml_client.logout_request_response(
+                #           saml_resp,
+                #           binding=BINDING_HTTP_REDIRECT
+                #       )
+                #   except KeyError:
+                #       # return error reply
+                #       pass
 
                 delete_cookies()
                 h.redirect_to(controller='user', action='logged_out')
